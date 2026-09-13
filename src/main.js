@@ -475,7 +475,7 @@ const TUTORIAL_STEPS = [
   [9,   'Shift 奔跑 · 空格 跳跃'],
   [13,  '走近补给自动拾取 · 血少时优先找药水']
 ];
-let tutorialT = 0, tutorialIdx = 0;
+let tutorialT = 0, tutorialIdx = 0, tutorialHideAt = -1;
 
 // 波次肃清 → 强化三选一 → 下一波
 function offerUpgrade() {
