@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ARENA BLASTER — 3D FPS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+  #game { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; opacity: 0; transition: opacity .4s; }
+  #hud.on { opacity: 1; }
+
+  /* 准星：四线 + 中点，随散布张开 */
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+  #crosshair .l { position: absolute; background: #eaf6ff; box-shadow: 0 0 3px rgba(0,0,0,.9); }
+  #crosshair .up    { width: 2px; height: 9px; left: -1px; bottom: var(--gap, 7px); }
+  #crosshair .down  { width: 2px; height: 9px; left: -1px; top: var(--gap, 7px); }
+  #crosshair .left  { height: 2px; width: 9px; top: -1px; right: var(--gap, 7px); }
+  #crosshair .right { height: 2px; width: 9px; top: -1px; left: var(--gap, 7px); }
+  #crosshair .dot { position: absolute; width: 2px; height: 2px; left: -1px; top: -1px; background: #eaf6ff; border-radius: 50%; }
+
+  /* 命中标记 */
+  #hitmarker { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; }
+  #hitmarker .m { position: absolute; width: 12px; height: 2px; background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.8); }
+  #hitmarker .m1 { transform: translate(5px, -1px) rotate(45deg); }
+  #hitmarker .m2 { transform: translate(-17px, -1px) rotate(-45deg); }
+  #hitmarker .m3 { transform: translate(5px, -1px) rotate(-45deg); }
+  #hitmarker .m4 { transform: translate(-17px, -1px) rotate(45deg); }
+  #hitmarker.show { animation: hm .18s ease-out; }
+  #hitmarker.kill .m { background: #ff5340; width: 16px; }
+  @keyframes hm { 0% { opacity: 1; transform: scale(1.5); } 100% { opacity: 0; transform: scale(1); } }
+
+  /* 左下：血量 */
+  #healthbox { position: absolute; left: 28px; bottom: 26px; color: #eaf6ff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #healthbox .label { font-size: 12px; letter-spacing: 3px; opacity: .75; }
+  #healthnum { font-size: 34px; font-weight: 700; line-height: 1; margin: 3px 0 6px; }
+  #hpbar { width: 210px; height: 7px; background: rgba(255,255,255,.16); border-radius: 4px; overflow: hidden; }
+  #hpfill { width: 100%; height: 100%; background: #6fe08c; border-radius: 4px; transition: width .15s; }
+  #hpfill.low { background: #ff5340; }
+
+  /* 右下：弹药 */
+  #ammobox { position: absolute; right: 30px; bottom: 26px; text-align: right; color: #eaf6ff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #ammobox .label { font-size: 12px; letter-spacing: 3px; opacity: .75; }
+  #ammo { font-size: 38px; font-weight: 700; line-height: 1; margin-top: 3px; }
+  #ammo small { font-size: 18px; opacity: .6; font-weight: 400; }
+  #reloadtip { font-size: 13px; color: #ffd257; height: 16px; margin-top: 2px; }
+
+  /* 右上：击杀 */
+  #killsbox { position: absolute; right: 30px; top: 24px; text-align: right; color: #eaf6ff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #killsbox .label { font-size: 12px; letter-spacing: 3px; opacity: .75; }
+  #kills { font-size: 32px; font-weight: 700; }
+  #target { font-size: 12px; opacity: .7; }
+
+  /* 击杀播报 */
+  #killfeed { position: absolute; left: 50%; top: 16%; transform: translateX(-50%); text-align: center; color: #fff; font-size: 18px; font-weight: 600; text-shadow: 0 1px 4px rgba(0,0,0,.9); opacity: 0; transition: opacity .25s; }
+
+  /* 指针锁定提示 */
+  #lockhint { position: absolute; left: 50%; top: 58%; transform: translateX(-50%); color: #ffd257; font-size: 15px; letter-spacing: 2px; text-shadow: 0 1px 3px rgba(0,0,0,.9); background: rgba(10,15,25,.55); padding: 8px 18px; border-radius: 6px; display: none; }
+
+  /* 调试条 */
+  #debugbar { position: absolute; left: 10px; top: 10px; color: #7dff9a; font: 12px/1.5 Consolas, monospace; text-shadow: 0 1px 2px #000; pointer-events: none; white-space: pre; }
+
+  /* FPS 显示 */
+  #fps { position: absolute; left: 10px; bottom: 10px; color: #9fe8b7; font: 12px Consolas, monospace; text-shadow: 0 1px 2px #000; }
+
+  /* 伤害数字 */
+  #dmglayer { position: absolute; inset: 0; overflow: hidden; }
+  .dmg { position: absolute; font: 700 17px "Segoe UI", sans-serif; color: #ffd257; text-shadow: 0 1px 3px rgba(0,0,0,.9); transform: translate(-50%, 0); animation: dmgfloat .7s ease-out forwards; }
+  .dmg.head { color: #ff5340; font-size: 21px; }
+  @keyframes dmgfloat { 0% { opacity: 1; transform: translate(-50%, 0) scale(1.15); } 100% { opacity: 0; transform: translate(-50%, -48px) scale(1); } }
+
+  /* 狙击镜筒 */
+  #scope { position: absolute; inset: 0; display: none; }
+  #scope .mask { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, transparent 31.5%, rgba(2,3,6,.985) 33.2%); }
+  #scope .hline, #scope .vline { position: absolute; background: rgba(20,20,20,.9); }
+  #scope .hline { left: 0; right: 0; top: 50%; height: 1.5px; margin-top: -0.75px; }
+  #scope .vline { top: 0; bottom: 0; left: 50%; width: 1.5px; margin-left: -0.75px; }
+  #scope .ring { position: absolute; left: 50%; top: 50%; width: 63.5vh; height: 63.5vh; transform: translate(-50%, -50%); border: 2px solid rgba(10,10,10,.85); border-radius: 50%; }
+
+  /* 冲刺冷却指示 */
+  #dashcd { position: absolute; left: 50%; top: 56%; transform: translateX(-50%); color: #9fd8ff; font-size: 12px; letter-spacing: 1px; text-shadow: 0 1px 2px #000; }
+
+  /* 强化卡选择 */
+  #upgradeScreen { z-index: 25; }
+  #upgradeScreen .cards { display: flex; gap: 22px; margin-top: 30px; }
+  .ucard { width: 230px; padding: 22px 20px; border-radius: 10px; background: rgba(12, 20, 34, .92); border: 2px solid #5a7ea0; cursor: pointer; transition: transform .12s, border-color .12s, box-shadow .12s; text-align: left; }
+  .ucard:hover { transform: translateY(-6px); box-shadow: 0 8px 28px rgba(90, 170, 255, .25); }
+  .ucard .ukey { font: 700 13px Consolas, monospace; color: #0d1420; background: #9fd8ff; border-radius: 4px; padding: 1px 8px; }
+  .ucard .uname { font-size: 20px; font-weight: 700; color: #eaf6ff; margin: 12px 0 8px; }
+  .ucard .udesc { font-size: 14px; color: #a9c2d8; line-height: 1.5; min-height: 42px; }
+  .ucard .urare { font-size: 12px; letter-spacing: 2px; margin-top: 12px; }
+  .ucard.common { border-color: #5a7ea0; } .ucard.common .urare { color: #9db8cf; } .ucard.common .uname { color: #cfe3f5; }
+  .ucard.rare { border-color: #b57dff; } .ucard.rare .urare { color: #cf9dff; } .ucard.rare .uname { color: #e7d4ff; }
+  .ucard.epic { border-color: #ffd257; box-shadow: 0 0 22px rgba(255, 210, 87, .18); } .ucard.epic .urare { color: #ffd257; } .ucard.epic .uname { color: #ffedb8; }
+
+  /* 武器名 */
+  #weaponname { font-size: 13px; letter-spacing: 2px; color: #9fd8ff; margin-bottom: 2px; }
+  #weaponname small { opacity: .6; }
+
+  /* 设置面板 */
+  .setrow { display: grid; grid-template-columns: 110px 220px 60px; align-items: center; gap: 14px; margin: 10px 0; text-align: left; }
+  .setrow label { font-size: 14px; color: #b9cfe4; }
+  .setrow input[type=range] { width: 100%; accent-color: #5ec7ff; }
+  .setrow span { font-size: 13px; color: #eaf6ff; }
+  .setrow input[type=checkbox] { width: 18px; height: 18px; accent-color: #5ec7ff; }
+  .btnrow { display: flex; gap: 16px; margin-top: 26px; }
+
+  /* 受击红闪 */
+  #vignette { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 40%, rgba(255, 30, 20, .55) 100%); }
+  #healflash { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(110,255,150,.35) 100%); }
+
+  /* ---------- 覆盖屏 ---------- */
+  .screen { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(8, 12, 20, .82); color: #eaf6ff; text-align: center; cursor: default; }
+  .screen.hidden { display: none; }
+  .screen h1 { font-size: 52px; letter-spacing: 10px; font-weight: 800; text-shadow: 0 2px 18px rgba(80,180,255,.45); }
+  .screen h2 { font-size: 22px; font-weight: 500; margin: 14px 0 26px; opacity: .85; }
+  .btn { pointer-events: auto; cursor: pointer; border: 1px solid rgba(140, 210, 255, .55); background: rgba(30, 60, 100, .45); color: #dff1ff; font-size: 18px; letter-spacing: 4px; padding: 14px 46px; border-radius: 6px; transition: background .15s, transform .1s; }
+  .btn:hover { background: rgba(60, 110, 170, .6); transform: translateY(-1px); }
+  .controls { margin-top: 34px; display: grid; grid-template-columns: auto auto; gap: 8px 18px; font-size: 14.5px; color: #b9cfe4; text-align: left; }
+  .controls b { color: #fff; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.22); border-radius: 4px; padding: 1px 8px; font-weight: 600; text-align: center; }
+  #loadbarwrap { width: 320px; height: 5px; background: rgba(255,255,255,.15); border-radius: 3px; margin-top: 30px; overflow: hidden; }
+  #loadbar { width: 0%; height: 100%; background: #5ec7ff; transition: width .2s; }
+  #loadtext { margin-top: 10px; font-size: 13px; color: #9db8cf; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud">
+  <div id="crosshair"><div class="l up"></div><div class="l down"></div><div class="l left"></div><div class="l right"></div><div class="dot"></div></div>
+  <div id="hitmarker"><div class="m m1"></div><div class="m m2"></div><div class="m m3"></div><div class="m m4"></div></div>
+  <div id="dmglayer"></div>
+  <div id="scope"><div class="mask"></div><div class="ring"></div><div class="hline"></div><div class="vline"></div></div>
+  <div id="healthbox">
+    <div class="label">生命 HEALTH</div>
+    <div id="healthnum">100</div>
+    <div id="hpbar"><div id="hpfill"></div></div>
+  </div>
+  <div id="ammobox">
+    <div id="weaponname">1/3 · 脉冲步枪</div>
+    <div class="label">弹药 AMMO</div>
+    <div id="ammo">30 <small>/ 90</small></div>
+    <div id="reloadtip"></div>
+  </div>
+  <div id="killsbox">
+    <div class="label" id="killslabel">击杀 KILLS</div>
+    <div id="kills">0</div>
+    <div id="target">目标 10 杀</div>
+  </div>
+  <div id="fps"></div>
+  <div id="debugbar"></div>
+  <div id="dashcd"></div>
+  <div id="killfeed"></div>
+  <div id="lockhint">🖱 鼠标未锁定 — 点击画面恢复视角（锁定后左键才能开枪）</div>
+  <div id="vignette"></div>
+  <div id="healflash"></div>
+</div>
+
+<div id="startScreen" class="screen">
+  <h1>ARENA BLASTER</h1>
+  <h2 id="startTip">竞技场射击 · 先拿到 10 个击杀</h2>
+  <div class="btnrow">
+    <button class="btn" id="startBtn">经 典 模 式</button>
+    <button class="btn" id="survivalBtn">生 存 模 式</button>
+    <button class="btn" id="openSettingsBtn" style="letter-spacing:2px">⚙ 设置</button>
+  </div>
+  <div style="margin-top:10px;font-size:13px;color:#8fa8bd">
+    经典：敌人无限复活，先拿 10 杀获胜 · 生存：一波波肃清不断增强的敌人，看你撑几波
+  </div>
+  <div class="controls">
+    <b>W A S D</b><span>移动</span>
+    <b>鼠标</b><span>视角</span>
+    <b>左键</b><span>射击（可按住连发）</span>
+    <b>右键</b><span>机瞄（更稳更准）</span>
+    <b>空格</b><span>跳跃</span>
+    <b>Shift</b><span>奔跑</span>
+    <b>R</b><span>换弹</span>
+    <b>1 2 3 / 滚轮</b><span>切换武器</span>
+    <b>Esc</b><span>释放鼠标 / 暂停</span>
+  </div>
+  <div id="loadbarwrap" style="visibility:hidden"><div id="loadbar"></div></div>
+  <div id="loadtext">点击开始后加载资源</div>
+</div>
+
+<div id="upgradeScreen" class="screen hidden" style="cursor:default">
+  <h1 style="font-size:32px;letter-spacing:6px">选 择 一 项 强 化</h1>
+  <h2 id="upgradeTip" style="font-size:15px;margin-top:10px">按 1 / 2 / 3 选择</h2>
+  <div class="cards" id="upgradeCards"></div>
+</div>
+
+<div id="settingsScreen" class="screen hidden">  <h1 style="font-size:36px;letter-spacing:6px">设 置</h1>
+  <div style="margin-top:26px">
+    <div class="setrow">
+      <label>鼠标灵敏度</label>
+      <input type="range" id="setSens" min="0.3" max="3" step="0.1">
+      <span id="setSensV"></span>
+    </div>
+    <div class="setrow">
+      <label>音量</label>
+      <input type="range" id="setVol" min="0" max="1" step="0.05">
+      <span id="setVolV"></span>
+    </div>
+    <div class="setrow">
+      <label>视场角 FOV</label>
+      <input type="range" id="setFov" min="70" max="100" step="1">
+      <span id="setFovV"></span>
+    </div>
+    <div class="setrow">
+      <label>反转 Y 轴</label>
+      <input type="checkbox" id="setInv">
+      <span></span>
+    </div>
+    <div class="setrow">
+      <label>显示帧率</label>
+      <input type="checkbox" id="setFpsShow" checked>
+      <span></span>
+    </div>
+  </div>
+  <div class="btnrow">
+    <button class="btn" id="settingsBack">返 回</button>
+  </div>
+</div>
+
+<div id="deathScreen" class="screen hidden">
+  <h1 style="color:#ff6a5c">你 阵 亡 了</h1>
+  <h2 id="deathTip">3 秒后重新部署…</h2>
+</div>
+
+<div id="winScreen" class="screen hidden">
+  <h1 id="winTitle" style="color:#8fe3ff">胜 利</h1>
+  <h2 id="winStat"></h2>
+  <button class="btn" id="restartBtn">再 来 一 局</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./lib/three.module.js",
+    "three/addons/loaders/FBXLoader.js": "./lib/addons/loaders/FBXLoader.js",
+    "three/addons/loaders/GLTFLoader.js": "./lib/addons/loaders/GLTFLoader.js",
+    "three/addons/utils/SkeletonUtils.js": "./lib/addons/utils/SkeletonUtils.js",
+    "three/addons/utils/BufferGeometryUtils.js": "./lib/addons/utils/BufferGeometryUtils.js"
+  }
+}
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
