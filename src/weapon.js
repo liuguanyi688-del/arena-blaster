@@ -93,6 +93,12 @@ export class Weapon {
     this.cur().vm.visible = true;
   }
 
+  // 回主菜单/重建对局时清理视图模型
+  dispose() {
+    for (const w of this.weapons) this.camera.remove(w.vm);
+    this.weapons.length = 0;
+  }
+
   cur() { return this.weapons[this.idx]; }
 
   // 当前武器的弹匣上限（扩容强化生效）

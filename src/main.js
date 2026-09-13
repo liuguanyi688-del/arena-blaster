@@ -217,10 +217,11 @@ document.getElementById('survivalBtn').addEventListener('click', () => {
   if (state === 'ready') startGame('survival');
 });
 
-document.getElementById('restartBtn').addEventListener('click', () => {
-  if (state !== 'win') return;
+// ---------- 对局重置（胜利结算/暂停菜单共用） ----------
+function resetMatch() {
   kills = 0; shotsFired = 0; shotsHit = 0;
   wave = 1; intermission = false;
+  upgradeDelay = -1; waveDelay = -1;
   runMods = defaultRunMods();
   runTaken = {};
   runPicks = [];
@@ -229,6 +230,8 @@ document.getElementById('restartBtn').addEventListener('click', () => {
   game.player.maxHp = 100 + runMods.maxHpBonus;
   game.player.extraJumps = runMods.extraJumps;
   game.player.hasDash = runMods.hasDash;
+  game.player.dashCdMult = runMods.dashCdMult;
+  game.player.dashCd = 0;
   game.weapon.runMods = runMods;
   game.weapon.resetAmmo();
   game.drops.clear();
@@ -241,10 +244,61 @@ document.getElementById('restartBtn').addEventListener('click', () => {
     }
     hud.setTopStat('击杀 KILLS', '0', `目标 ${WIN_KILLS} 杀`);
   }
+  input.fire = false; input.ads = false;
+}
+
+document.getElementById('restartBtn').addEventListener('click', () => {
+  if (state !== 'win') return;
+  resetMatch();
   hud.setWinTitle('胜 利');
   hud.showScreen(null);
   state = 'playing';
   tryLock();
+});
+
+// ---------- 主菜单 / 暂停按钮 ----------
+function updateStartButtons() {
+  const paused = state === 'paused';
+  const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+  show('startBtn', !paused);
+  show('survivalBtn', !paused);
+  show('btnResume', paused);
+  show('btnRestartMatch', paused);
+  show('btnMainMenu', paused);
+  document.querySelector('#startScreen h2').textContent = paused
+    ? '已暂停 — 点击任意空白处继续'
+    : '竞技场射击 · 先拿到 10 个击杀';
+}
+
+function exitToMenu() {
+  if (!game) return;
+  teardownMatch();
+  state = 'ready';
+  input.fire = false; input.ads = false;
+  hud.showGame(false);
+  hud.showScreen('start');
+  updateStartButtons();
+}
+
+function teardownMatch() {
+  scene.remove(game.matchGroup);        // 敌人/掉落/特效全部随组拆除
+  game.weapon.dispose();                // 视图模型挂在相机下，单独移除
+  game.drops.clear();
+  game = null;
+}
+
+document.getElementById('btnResume').addEventListener('click', () => {
+  if (state === 'paused') resumeGame();
+});
+document.getElementById('btnRestartMatch').addEventListener('click', () => {
+  if (state !== 'paused') return;
+  resetMatch();
+  hud.showScreen(null);
+  state = 'playing';
+  tryLock();
+});
+document.getElementById('btnMainMenu').addEventListener('click', () => {
+  if (state === 'paused') exitToMenu();
 });
 
 // ---------- 指针锁定 ----------
@@ -263,10 +317,15 @@ function tryLock() {
 
 function startGame(mode = 'classic') {
   sound.unlock(); // 恢复被浏览器挂起的音频
+  if (game) teardownMatch(); // 从主菜单再次开局前，拆掉上一局的场景对象
   gameMode = mode;
   wave = 1;
   intermission = false;
   const { playerSpawn, colliders } = assets.level;
+
+  // 本局所有场景对象统一挂到 matchGroup，回主菜单时整体拆除
+  const matchGroup = new THREE.Group();
+  scene.add(matchGroup);
 
   const player = new Player(camera);
   player.pos.copy(playerSpawn);
@@ -278,7 +337,7 @@ function startGame(mode = 'classic') {
     sound.play('hurt', { volume: 0.55 });
   };
 
-  const effects = new Effects(scene);
+  const effects = new Effects(matchGroup);
 
   const weapon = new Weapon(camera, assets.guns, effects, sound);
   weapon.player = player;
@@ -308,14 +367,14 @@ function startGame(mode = 'classic') {
   };
   hud.setWeapon(weapon.cur().cfg.name, 0, weapon.weapons.length);
 
-  const enemies = new EnemyManager(scene, {
+  const enemies = new EnemyManager(matchGroup, {
     char: assets.char, clips: assets.clips, skins: assets.skins, gun: assets.guns['blaster-f']
   }, assets.level, player, effects, sound, {
     onPlayerHit: (died) => { if (died) onPlayerDeath(); },
     onEnemyDied: (e) => onEnemyKilled(e)
   }, { survival: gameMode === 'survival' });
 
-  const drops = new DropManager(scene, assets.drops);
+  const drops = new DropManager(matchGroup, assets.drops);
 
   runMods = defaultRunMods();
   runTaken = {};
@@ -561,10 +620,8 @@ document.addEventListener('pointerlockchange', () => {
     state = 'paused';
     input.fire = false; input.ads = false;
     game && game.player.keys.clear();
-    const h2 = document.querySelector('#startScreen h2');
-    h2.textContent = '已暂停 — 点击下方按钮继续';
+    updateStartButtons();
     hud.showScreen('start');
-    document.getElementById('startBtn').textContent = '继 续 游 戏';
   }
 });
 
