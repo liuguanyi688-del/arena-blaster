@@ -413,15 +413,16 @@ function startWave(n) {
   wave = n;
   intermission = false;
   let count = Math.min(3 + n, 9);
-  game.enemies.startWave(count, waveMult(n));
+  game.enemies.startWave(count, waveMult(n), n);
 
   // 精英波（每 5 波）：领队强化成精英，必掉稀有补给
   if (n % 5 === 0) {
     const elite = game.enemies.enemies.find(e => e.alive);
     if (elite) {
       elite.hp *= 2.2;
-      elite.root.scale.setScalar(1.28);
+      elite.root.scale.multiplyScalar(1.28);
       elite.elite = true;
+      elite.typeLabel = '精英·' + elite.typeLabel;
     }
     hud.killfeed(`⚠ 第 ${n} 波 [精英] 来袭 — 重装敌人出现`);
   } else {
@@ -532,7 +533,7 @@ function onEnemyKilled(e) {
   else if (roll < 0.62 * dm) game.drops.spawn(e.pos, 'ammo');
   // 精英必掉双补给
   if (e.elite) { game.drops.spawn(e.pos, 'heal'); game.drops.spawn(e.pos, 'ammo'); }
-  hud.killfeed(`✔ 击杀 敌方 unit-0${e.id + 1}`);
+  hud.killfeed(`✔ 击杀 敌方 ${e.typeLabel || 'unit'}`);
 
   if (gameMode === 'survival') {
     // 波次清算：全部肃清 → 强化三选一 → 下一波

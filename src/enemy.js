@@ -25,6 +25,13 @@ const SKINS = [
   './assets/animated-characters-protagonists/Skins/skaterMaleA.png'
 ];
 
+// 兵种差异化：属性/皮肤/体型（数值刻意温和，保爽杀体验）
+const ENEMY_TYPES = {
+  grunt: { label: '突击兵', hp: 1, speed: 1, dmg: 1, scale: 1, skin: 1 },            // cyborg
+  swift: { label: '冲锋兵', hp: 0.65, speed: 1.4, dmg: 0.8, scale: 0.94, skin: 2 }, // skaterF 冲锋
+  heavy: { label: '重装兵', hp: 2.6, speed: 0.6, dmg: 1.45, scale: 1.16, skin: 0 }  // criminal 重装
+};
+
 let boltGeo = null, boltMat = null;
 function makeBoltMesh() {
   if (!boltGeo) {
@@ -77,8 +84,9 @@ export class Enemy {
     this.model.scale.setScalar(ENEMY_H / h);
     this.model.position.y = 0;
 
-    // 皮肤贴图（每个敌人独立材质，便于闪烁/淡出）
-    const skinTex = templates.skins[id % templates.skins.length];
+    // 皮肤贴图（每个敌人独立材质，便于闪烁/淡出）；兵种可在 spawnAt 时换肤
+    this.skinTextures = templates.skins;
+    const skinTex = this.skinTextures[id % this.skinTextures.length];
     this.mats = [];
     this.hitMeshes = [];
     this.model.traverse(o => {
@@ -166,11 +174,20 @@ export class Enemy {
     }
   }
 
-  spawnAt(v, mult) {
+  spawnAt(v, mult, type = 'grunt') {
     this.pos.copy(v);
     this.pos.x += (Math.random() - 0.5) * 2;
     this.pos.z += (Math.random() - 0.5) * 2;
+    const t = ENEMY_TYPES[type] || ENEMY_TYPES.grunt;
+    this.typeLabel = t.label;
     if (mult) this.statMult = mult;
+    // 兵种修正叠加到波次倍率上
+    this.statMult = {
+      hp: (this.statMult.hp || 1) * t.hp,
+      speed: (this.statMult.speed || 1) * t.speed,
+      dmg: (this.statMult.dmg || 1) * t.dmg,
+      acc: this.statMult.acc || 1
+    };
     this.hp = ENEMY_HP * this.statMult.hp;
     this.alive = true;
     this.aggro = false;
@@ -180,6 +197,11 @@ export class Enemy {
     this.flashT = 0;
     this.setOpacity(1);
     for (const m of this.mats) m.emissive.set(0x000000); // 复位受击红闪（死亡分支不会走到复位逻辑）
+    // 兵种皮肤
+    const tex = this.skinTextures[t.skin % this.skinTextures.length];
+    for (const m of this.mats) { m.map = tex; m.needsUpdate = true; }
+    // 兵种体型（缩放 root，不影响碰撞盒的反向缩放）
+    this.root.scale.setScalar(t.scale);
     this.model.rotation.set(0, 0, 0);
     this.pickPatrolTarget();
     this.root.visible = true;
@@ -530,14 +552,20 @@ export class EnemyManager {
     while (this.enemies.length < n) this._create();
   }
 
-  // 生存模式：开启一波（数量 + 属性倍率），多余敌人退场
-  startWave(count, mult) {
+  // 生存模式：开启一波（数量 + 属性倍率 + 波次兵种混编），多余敌人退场
+  startWave(count, mult, wave = 1) {
     this.ensureCount(count);
     const pts = this.level.enemySpawns.filter(p => p.distanceTo(this.player.pos) > 10);
     const use = pts.length ? pts : this.level.enemySpawns;
+    // 兵种解锁节奏：第2波起混入冲锋兵，第3波起混入重装兵
+    const typeFor = (i) => {
+      if (wave >= 3 && i % 3 === 2) return 'heavy';
+      if (wave >= 2 && i % 3 === 1) return 'swift';
+      return 'grunt';
+    };
     this.enemies.forEach((e, i) => {
       if (i < count) {
-        e.spawnAt(use[i % use.length], mult);
+        e.spawnAt(use[i % use.length], mult, typeFor(i));
       } else {
         e.alive = false;
         e.root.visible = false;
