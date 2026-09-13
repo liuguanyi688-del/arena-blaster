@@ -6,7 +6,9 @@ export const settings = {
   volume: 0.55,   // 主音量
   fov: 75,        // 视场角
   invertY: false, // 反转Y轴
-  fps: true       // 显示帧率
+  fps: true,      // 显示帧率
+  shakeMult: 1,   // 受击震屏强度 0~1.5
+  tutorial: true  // 新手引导提示
 };
 
 export function loadSettings() {

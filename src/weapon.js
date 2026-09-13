@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+﻿import * as THREE from 'three';
 
 // ================= 武器配置 =================
 export const WEAPON_CONFIGS = [
@@ -19,6 +19,12 @@ export const WEAPON_CONFIGS = [
     rpm: 70, dmg: 95, mag: 8, reserve: 24, auto: false,
     spreadHip: 0.05, spreadAds: 0.0012, bloom: 0.02, recoil: 0.05,
     adsZoom: 0.42, flashInt: 4.5, tracer: 0xff9d6c
+  },
+  {
+    name: '霰弹爆破者', model: 'blaster-d', sound: 'shotShotgun', yaw: Math.PI,
+    rpm: 75, dmg: 12, pellets: 6, mag: 6, reserve: 30, auto: false,
+    spreadHip: 0.085, spreadAds: 0.055, bloom: 0.008, recoil: 0.06,
+    adsZoom: 0.85, flashInt: 3.5, tracer: 0xffb46a
   }
 ];
 
@@ -162,31 +168,49 @@ export class Weapon {
     this.cooldown = 60 / (w.cfg.rpm * mods.rpmMult);
     w.ammo--;
     this.onShotFired && this.onShotFired();
+    this._targets = targets;
 
-    // 弹道：视线 + 散布
+    // 主弹道：视线 + 散布（霰弹枪会补发额外弹丸，每颗独立判定）
     this.camera.getWorldDirection(this._dir);
     const sp = this.spread;
     this._dir.x += (Math.random() - 0.5) * 2 * sp;
     this._dir.y += (Math.random() - 0.5) * 2 * sp;
     this._dir.z += (Math.random() - 0.5) * 2 * sp;
     this._dir.normalize();
+    this.fireRay(this._dir.clone(), mods, w);
 
-    this._ray.set(this.camera.getWorldPosition(new THREE.Vector3()), this._dir);
-    this._ray.far = 200;
-    const hits = this._ray.intersectObjects(targets, false);
-    if (window.__shotDbg !== undefined) {
-      const h0 = hits[0];
-      window.__shotDbg = `h${hits.length}${h0 ? (h0.object.userData.enemyRef ? 'E' : 'W') : ''}`;
+    if (w.cfg.pellets > 1) {
+      const n = w.cfg.pellets - 1;
+      for (let k = 0; k < n; k++) {
+        const d = this._dir.clone();
+        const a = ((k + 1) / (n + 1) - 0.5) * 0.12 + (Math.random() - 0.5) * sp * 1.4;
+        d.applyAxisAngle(new THREE.Vector3(0, 1, 0), a);
+        d.y += (Math.random() - 0.5) * 0.05;
+        this.fireRay(d.normalize(), mods, w);
+      }
     }
 
-    // 穿透弹：最多命中 1+pierce 名敌人才被阻挡（墙体始终阻挡）
-    const allowEnemies = 1 + (mods.pierce || 0);
-    let applied = 0;
-    let end = this._ray.ray.origin.clone().addScaledVector(this._dir, 120);
-    let worldHit = null;
+    this.player && this.player.applyRecoil(w.cfg.recoil + this.bloom * 0.05);
+    this.kick = Math.min(this.kick + 0.055, 0.12);
+    this.kickRot = Math.min(this.kickRot + 0.09, 0.22);
+    this.bloom = Math.min(this.bloom + w.cfg.bloom, BLOOM_MAX);
+
     this.camera.updateMatrixWorld(true);
     const mz = w.muzzle.getWorldPosition(new THREE.Vector3());
+    this.effects.flash(mz, w.cfg.flashInt, w.cfg.flashInt > 3 ? 9 : 6, 0.05);
 
+    this.sound.play(w.cfg.sound, { pitch: 1 + (Math.random() - 0.5) * 0.12, volume: 0.85 });
+    if (w.ammo <= 0) this.startReload();
+  }
+
+  // 单条弹丸的射线判定：敌人（穿透预算内）与墙体，含曳光/火花/伤害回调
+  fireRay(dir, mods, w) {
+    this._ray.set(this.camera.getWorldPosition(new THREE.Vector3()), dir);
+    this._ray.far = 200;
+    const hits = this._ray.intersectObjects(this._targets || [], false);
+    const allowEnemies = 1 + (mods.pierce || 0);
+    let applied = 0;
+    let end = this._ray.ray.origin.clone().addScaledVector(dir, 120);
     for (const h of hits) {
       const enemy = h.object.userData.enemyRef;
       if (enemy && enemy.alive) {
@@ -200,28 +224,18 @@ export class Weapon {
         this.effects.sparks(h.point, n);
         this.onHit && this.onHit({ type: 'enemy', enemy, point: h.point, normal: n, damage: dmg, head, crit });
         applied++;
-        if (applied >= allowEnemies) { end = h.point; worldHit = h; break; }
+        if (applied >= allowEnemies) { end = h.point; break; }
       } else {
-        end = h.point; worldHit = h; break; // 墙体/道具阻挡
+        end = h.point;
+        const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : null;
+        this.effects.sparks(end, n);
+        break;
       }
     }
-
+    this.camera.updateMatrixWorld(true);
+    const mz = w.muzzle.getWorldPosition(new THREE.Vector3());
     this.effects.tracer(mz, end, w.cfg.tracer);
-    this.effects.flash(mz, w.cfg.flashInt, w.cfg.flashInt > 3 ? 9 : 6, 0.05);
-    if (worldHit) {
-      const n = worldHit.face ? worldHit.face.normal.clone().transformDirection(worldHit.object.matrixWorld) : null;
-      this.effects.sparks(end, n);
-    }
-
-    this.player && this.player.applyRecoil(w.cfg.recoil + this.bloom * 0.05);
-    this.kick = Math.min(this.kick + 0.055, 0.12);
-    this.kickRot = Math.min(this.kickRot + 0.09, 0.22);
-    this.bloom = Math.min(this.bloom + w.cfg.bloom, BLOOM_MAX);
-
-    this.sound.play(w.cfg.sound, { pitch: 1 + (Math.random() - 0.5) * 0.12, volume: 0.85 });
-    if (w.ammo <= 0) this.startReload();
   }
-
   update(dt, input, targets) {
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.bloom = Math.max(0, this.bloom - BLOOM_DECAY * dt);
@@ -298,3 +312,4 @@ export class Weapon {
     w.vm.rotation.z += (rz - w.vm.rotation.z) * lerpK;
   }
 }
+

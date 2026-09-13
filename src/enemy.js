@@ -3,16 +3,17 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { moveWithCollisions } from './player.js';
 
 // ================= 参数 =================
+// 敌人强度刻意压制：爽杀体验优先，玩家永远有操作空间
 const PATROL_SPEED = 2.4;
 const CHASE_SPEED = 4.6;
 const STRAFE_SPEED = 2.8;
 const VISION_DIST = 22;
-const ATTACK_DIST = 17;
+const ATTACK_DIST = 15;
 const BOLT_SPEED = 34;
-const BOLT_DMG = 9;
+const BOLT_DMG = 8;
 const BURST = 3;
-const BURST_GAP = 0.14;
-const ATTACK_COOLDOWN = 1.15;
+const BURST_GAP = 0.2;
+const ATTACK_COOLDOWN = 1.9;      // 攻速削弱：更长的攻击间隔
 const ENEMY_R = 0.38;
 const ENEMY_H = 1.7;
 const ENEMY_HP = 100;
@@ -29,7 +30,8 @@ const SKINS = [
 const ENEMY_TYPES = {
   grunt: { label: '突击兵', hp: 1, speed: 1, dmg: 1, scale: 1, skin: 1 },            // cyborg
   swift: { label: '冲锋兵', hp: 0.65, speed: 1.4, dmg: 0.8, scale: 0.94, skin: 2 }, // skaterF 冲锋
-  heavy: { label: '重装兵', hp: 2.6, speed: 0.6, dmg: 1.45, scale: 1.16, skin: 0 }  // criminal 重装
+  heavy: { label: '重装兵', hp: 2.6, speed: 0.6, dmg: 1.45, scale: 1.16, skin: 0 }, // criminal 重装
+  boss: { label: 'BOSS·重装指挥官', hp: 9, speed: 0.75, dmg: 1.6, scale: 2.1, skin: 3, boss: true }
 };
 
 let boltGeo = null, boltMat = null;
@@ -189,6 +191,8 @@ export class Enemy {
       acc: this.statMult.acc || 1
     };
     this.hp = ENEMY_HP * this.statMult.hp;
+    this.maxHp = this.hp; // 血条用
+    this.isBoss = !!t.boss;
     this.alive = true;
     this.aggro = false;
     this.state = 'PATROL';
@@ -228,6 +232,9 @@ export class Enemy {
     this.alive = false;
     this.deathT = 0;
     this.vel.set(0, 0, 0);
+    // 归还全局攻击名额（若正持有着）
+    if (this._slotHeld && this.sharedAttack) { this.sharedAttack.attackers--; this._slotHeld = false; }
+    this.burstLeft = 0;
     this.hooks.onEnemyDied && this.hooks.onEnemyDied(this);
     this.sound.playAt('explosion', this.pos.distanceTo(this.player.pos), 0.9);
     this.effects.smoke(this.pos.clone().add(new THREE.Vector3(0, 0.4, 0)), 5);
@@ -243,17 +250,36 @@ export class Enemy {
     dir.y += (Math.random() - 0.5) * 1.4 * err;
     dir.z += (Math.random() - 0.5) * 2 * err;
     dir.normalize();
-
-    const bolt = makeBoltMesh();
-    bolt.position.copy(mz);
-    this.scene.add(bolt);
-    this.bolts = this.bolts || [];
-    this.bolts.push({ mesh: bolt, vel: dir.clone().multiplyScalar(BOLT_SPEED), life: 2.2 });
+    this.spawnBolt(dir, this.statMult.dmg || 1);
 
     this.effects.flash(mz, 1.6, 4, 0.05);
     this.sound.playAt('shotEnemy', this.pos.distanceTo(this.player.pos), 0.75);
     // 开火后坐：身体轻轻一颤（程序动画）
     this.recoilT = 0.09;
+  }
+
+  // Boss 专属：朝玩家扇形弹幕（5 发）
+  shootRadial() {
+    const mz = this.gunTip.getWorldPosition(new THREE.Vector3());
+    const target = this.player.eyePos;
+    const baseDir = target.sub(mz).normalize();
+    for (let k = -2; k <= 2; k++) {
+      const dir = baseDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), k * 0.13);
+      dir.y += (Math.random() - 0.5) * 0.04;
+      this.spawnBolt(dir.normalize(), this.statMult.dmg || 1);
+    }
+    this.effects.flash(mz, 3, 6, 0.06);
+    this.sound.playAt('shotEnemy', this.pos.distanceTo(this.player.pos), 0.9);
+    this.recoilT = 0.12;
+  }
+
+  spawnBolt(dir, dmgMult) {
+    const bolt = makeBoltMesh();
+    bolt.position.copy(this.gunTip.getWorldPosition(new THREE.Vector3()));
+    this.scene.add(bolt);
+    this.bolts = this.bolts || [];
+    this.bolts.push({ mesh: bolt, vel: dir.clone().multiplyScalar(BOLT_SPEED), life: 2.2, dmg: dmgMult });
+    this.effects.flash(bolt.position, 1.6, 4, 0.05);
   }
 
   updateBolts(dt) {
@@ -282,7 +308,7 @@ export class Enemy {
         const t = Math.max(0, Math.min(1, pc.clone().sub(from).dot(ab) / (ab.lengthSq() || 1)));
         const closest = from.clone().addScaledVector(ab, t);
         if (closest.distanceTo(pc) < 0.55) {
-          const died = this.player.damage(Math.round((BOLT_DMG + Math.floor(Math.random() * 5)) * (this.statMult.dmg || 1)), from);
+          const died = this.player.damage(Math.round((BOLT_DMG + Math.floor(Math.random() * 5)) * (b.dmg || 1)), from);
           this.hooks.onPlayerHit && this.hooks.onPlayerHit(died);
           hit = true;
         }
@@ -442,22 +468,56 @@ export class Enemy {
       moveWithCollisions(this.pos, this.vel, dt, ENEMY_R, ENEMY_H, this.level.colliders);
       this.play('run');
 
-      // 开火节奏： bursts
+      // Boss 冲撞：周期性朝玩家突进，接触伤害
+      if (this.isBoss) {
+        this.chargeCd = (this.chargeCd ?? 4) - dt;
+        if (this.chargeT > 0) {
+          this.chargeT -= dt;
+          this.vel.x = this.chargeDir.x * 20;
+          this.vel.z = this.chargeDir.z * 20;
+          this.vel.y = 0;
+          moveWithCollisions(this.pos, this.vel, dt, ENEMY_R, ENEMY_H, this.level.colliders);
+          // 撞到玩家
+          if (this.pos.distanceTo(this.player.pos) < 1.6 && (this._chargeHitT ?? 0) <= 0) {
+            this._chargeHitT = 0.8;
+            const died = this.player.damage(Math.round(22 * (this.statMult.dmg || 1)), this.pos);
+            this.hooks.onPlayerHit && this.hooks.onPlayerHit(died);
+          }
+        } else if (this.chargeCd <= 0) {
+          this.chargeCd = 6 + Math.random() * 2;
+          this.chargeT = 0.55;
+          this.chargeDir = toP.clone();
+          this.sound.playAt('shotSniper', distP, 0.8);
+        }
+        if ((this._chargeHitT ?? 0) > 0) this._chargeHitT -= dt;
+      }
+
+      // 开火节奏：burst + 全局攻击名额（最多 2 人同时开火，杜绝群殴秒杀）
       this.attackCd -= dt;
       if (this.attackCd <= 0 && this.burstLeft <= 0) {
-        this.burstLeft = BURST;
-        this.shotTimer = 0;
+        const shared = this.sharedAttack;
+        const maxSim = this.isBoss ? 99 : (shared ? shared.maxAttackers : 2);
+        const cur = shared ? shared.attackers : 0;
+        if (this.isBoss || cur < maxSim) {
+          this.burstLeft = this.isBoss ? 1 : BURST;
+          this.shotTimer = 0;
+          if (shared && !this.isBoss) { shared.attackers++; this._slotHeld = true; }
+        }
       }
     }
 
-    // burst 射击计时（ATTACK 中触发）
+    // burst 射击计时（ATTACK 中触发）；burst 结束归还全局攻击名额
     if (this.burstLeft > 0) {
       this.shotTimer -= dt;
       if (this.shotTimer <= 0) {
-        this.shotTimer = BURST_GAP;
+        this.shotTimer = this.isBoss ? 0.5 : BURST_GAP;
         this.burstLeft--;
-        this.shoot();
-        if (this.burstLeft <= 0) this.attackCd = ATTACK_COOLDOWN + Math.random() * 0.6;
+        if (this.isBoss) this.shootRadial();
+        else this.shoot();
+        if (this.burstLeft <= 0) {
+          this.attackCd = ATTACK_COOLDOWN + Math.random() * 0.6;
+          if (this._slotHeld && this.sharedAttack) { this.sharedAttack.attackers--; this._slotHeld = false; }
+        }
       }
     }
 
@@ -502,6 +562,7 @@ export class EnemyManager {
     this.sound = sound;
     this.hooks = hooks;
     this.survival = !!opts.survival; // 生存模式：敌人死亡后不自动复活
+    this.sharedAttack = { attackers: 0, maxAttackers: 2 }; // 全局攻击名额：最多 2 人同时开火
     this.enemies = [];
     this.hitMeshes = [];
 
@@ -543,6 +604,7 @@ export class EnemyManager {
     const e = new Enemy(this.enemies.length, this.scene, this.templates, this.level,
       this.player, this.effects, this.sound, this.hooks);
     e.survivalMode = this.survival;
+    e.sharedAttack = this.sharedAttack;
     e.others = this.enemies;
     this.enemies.push(e);
     return e;
@@ -552,13 +614,14 @@ export class EnemyManager {
     while (this.enemies.length < n) this._create();
   }
 
-  // 生存模式：开启一波（数量 + 属性倍率 + 波次兵种混编），多余敌人退场
-  startWave(count, mult, wave = 1) {
+  // 生存模式：开启一波（数量/倍率/波次/BOSS标记），兵种混编，多余敌人退场
+  startWave(count, mult, wave = 1, opts = {}) {
     this.ensureCount(count);
     const pts = this.level.enemySpawns.filter(p => p.distanceTo(this.player.pos) > 10);
     const use = pts.length ? pts : this.level.enemySpawns;
-    // 兵种解锁节奏：第2波起混入冲锋兵，第3波起混入重装兵
+    // 兵种解锁节奏：第2波起混入冲锋兵，第3波起混入重装兵；BOSS波 i===0 为 BOSS
     const typeFor = (i) => {
+      if (opts.boss && i === 0) return 'boss';
       if (wave >= 3 && i % 3 === 2) return 'heavy';
       if (wave >= 2 && i % 3 === 1) return 'swift';
       return 'grunt';

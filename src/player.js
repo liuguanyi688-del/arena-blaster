@@ -90,6 +90,8 @@ export class Player {
     this.dashDir = new THREE.Vector3();
     this._spacePrev = false;
     this._qPrev = false;
+    this.onStep = null;     // 脚步声回调（main 注入）
+    this._stepAcc = 0;
   }
 
   get sensScale() {
@@ -203,6 +205,14 @@ export class Player {
     const targetAmp = this.grounded ? Math.min(1, hspeed / WALK_SPEED) * (this.ads ? 0.008 : 0.02) : 0;
     this.bobAmp += (targetAmp - this.bobAmp) * Math.min(1, 10 * dt);
     this.bobPhase += hspeed * dt * 1.6;
+    // 脚步声：按移动距离触发（奔跑更密）
+    if (this.grounded && hspeed > 2 && this.onStep) {
+      this._stepAcc += hspeed * dt;
+      if (this._stepAcc >= (this.sprinting ? 2.6 : 2.2)) {
+        this._stepAcc = 0;
+        this.onStep();
+      }
+    }
 
     // 后坐力回落（软回落，打完自动压回一半左右）
     this.recoil = Math.max(0, this.recoil - this.recoil * 6 * dt - 0.004 * dt);

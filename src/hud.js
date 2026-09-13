@@ -22,6 +22,14 @@ export class HUD {
       dashcd: document.getElementById('dashcd'),
       upgradeScreen: document.getElementById('upgradeScreen'),
       upgradeCards: document.getElementById('upgradeCards'),
+      bossbar: document.getElementById('bossbar'),
+      bossLabel: document.querySelector('#bossbar .label'),
+      bossFill: document.querySelector('#bossbar .fill'),
+      tutorial: document.getElementById('tutorial'),
+      statsScreen: document.getElementById('statsScreen'),
+      stKills: document.getElementById('stKills'),
+      stGames: document.getElementById('stGames'),
+      stWave: document.getElementById('stWave'),
       killslabel: document.getElementById('killslabel'),
       target: document.getElementById('target'),
       winTitle: document.getElementById('winTitle'),
@@ -200,8 +208,37 @@ export class HUD {
   showScreen(name) {
     this.el.start.classList.toggle('hidden', name !== 'start');
     this.el.settings.classList.toggle('hidden', name !== 'settings');
+    this.el.statsScreen.classList.toggle('hidden', name !== 'stats');
     this.el.death.classList.toggle('hidden', name !== 'death');
     this.el.win.classList.toggle('hidden', name !== 'win');
+  }
+
+  setBossBar(label, pct) {
+    if (!label) { this.el.bossbar.style.display = 'none'; return; }
+    this.el.bossbar.style.display = 'block';
+    if (this._lastBossLabel !== label) {
+      this._lastBossLabel = label;
+      this.el.bossLabel.textContent = label;
+    }
+    const v = Math.round(Math.max(0, Math.min(1, pct)) * 100);
+    if (v !== this._lastBossPct) {
+      this._lastBossPct = v;
+      this.el.bossFill.style.width = v + '%';
+    }
+  }
+
+  setTutorial(text) {
+    const el = this.el.tutorial;
+    if (!text) { el.style.display = 'none'; return; }
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+
+  showStats(stats) {
+    this.el.stKills.textContent = stats.kills;
+    this.el.stGames.textContent = stats.games;
+    this.el.stWave.textContent = `第 ${stats.bestWave} 波`;
+    this.el.statsScreen.classList.remove('hidden');
   }
 
   setWeapon(name, idx, count) {

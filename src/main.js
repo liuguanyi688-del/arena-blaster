@@ -10,7 +10,7 @@ import { HUD } from './hud.js';
 import { SoundManager } from './audio.js';
 import { DropManager } from './drops.js';
 import { loadSettings, saveSettings, settings } from './settings.js';
-import { defaultRunMods, pickUpgradeCards } from './upgrades.js';
+import { defaultRunMods, pickUpgradeCards, UPGRADES } from './upgrades.js';
 
 const WIN_KILLS = 10;
 let gameMode = 'classic'; // classic | survival
@@ -19,6 +19,10 @@ let intermission = false;
 let runMods = defaultRunMods(); // 本局成长属性（肉鸽强化）
 let runTaken = {};              // 已选强化计数
 let runPicks = [];              // 本局强化名列表（结算展示）
+// 跨局统计（localStorage）
+let stats = { kills: 0, games: 0, bestWave: 0 };
+try { stats = Object.assign(stats, JSON.parse(localStorage.getItem('ab_stats') || '{}')); } catch (e) {}
+function saveStats() { try { localStorage.setItem('ab_stats', JSON.stringify(stats)); } catch (e) {} }
 // 游戏流程计时器：帧驱动（画面渲染时才倒数）——绝不用 setTimeout，
 // 后台冻结的标签页里 setTimeout 永远不触发，会导致波次/选卡流程卡死
 let upgradeDelay = -1; // >=0 时倒数到 0 弹出强化三选一
@@ -88,13 +92,13 @@ let kills = 0, shotsFired = 0, shotsHit = 0;
 
 async function preload() {
   let done = 0;
-  const total = 13;
-  const tick = (label) => { done++; hud.loadingProgress(done / total, label); };
+  const total = 14;
+  const tick = (label) => { done++; hud.loadingProgress(Math.min(1, done / total), label); };
 
   const gltfLoader = new GLTFLoader();
   const fbxLoader = new FBXLoader();
 
-  // 三把武器模型
+  // 三把主战武器 + 霰弹枪模型
   const gunBase = './assets/blaster-kit/Models/GLB format/';
   assets.guns = {};
   for (const cfg of WEAPON_CONFIGS) {
@@ -142,11 +146,15 @@ async function preload() {
     ['shot', './assets/sci-fi-sounds/Audio/laserSmall_001.ogg'],
     ['shotSMG', './assets/sci-fi-sounds/Audio/laserRetro_002.ogg'],
     ['shotSniper', './assets/sci-fi-sounds/Audio/laserLarge_000.ogg'],
+    ['shotShotgun', './assets/sci-fi-sounds/Audio/laserLarge_003.ogg'],
     ['shotEnemy', './assets/sci-fi-sounds/Audio/laserLarge_002.ogg'],
     ['hit', './assets/sci-fi-sounds/Audio/impactMetal_003.ogg'],
     ['explosion', './assets/sci-fi-sounds/Audio/explosionCrunch_001.ogg'],
     ['hurt', './assets/sci-fi-sounds/Audio/forceField_002.ogg'],
-    ['reload', './assets/sci-fi-sounds/Audio/doorClose_000.ogg']
+    ['reload', './assets/sci-fi-sounds/Audio/doorClose_000.ogg'],
+    ['step', './assets/impact-sounds/Audio/footstep_concrete_002.ogg'],
+    ['step2', './assets/impact-sounds/Audio/footstep_concrete_003.ogg'],
+    ['pickup', './assets/impact-sounds/Audio/impactSoft_medium_002.ogg']
   ];
   await Promise.all(sfx.map(([n, u]) => sound.load(n, u)));
   tick('音效');
@@ -178,12 +186,14 @@ function applySettings() {
 function bindSettingsUI() {
   const $ = id => document.getElementById(id);
   const sens = $('setSens'), vol = $('setVol'), fov = $('setFov'), inv = $('setInv'), fpsC = $('setFpsShow');
+  const shake = $('setShake'), tut = $('setTut');
   sens.value = settings.sens; vol.value = settings.volume; fov.value = settings.fov; inv.checked = settings.invertY;
-  fpsC.checked = settings.fps;
+  fpsC.checked = settings.fps; shake.value = settings.shakeMult; tut.checked = settings.tutorial;
   const labels = () => {
     $('setSensV').textContent = Number(settings.sens).toFixed(1) + 'x';
     $('setVolV').textContent = Math.round(settings.volume * 100) + '%';
     $('setFovV').textContent = settings.fov + '°';
+    $('setShakeV').textContent = Math.round(settings.shakeMult * 100) + '%';
   };
   labels();
   hud.showFps(settings.fps);
@@ -192,6 +202,8 @@ function bindSettingsUI() {
   fov.addEventListener('input', () => { settings.fov = +fov.value; saveSettings(); applySettings(); labels(); });
   inv.addEventListener('change', () => { settings.invertY = inv.checked; saveSettings(); applySettings(); });
   fpsC.addEventListener('change', () => { settings.fps = fpsC.checked; saveSettings(); hud.showFps(settings.fps); });
+  shake.addEventListener('input', () => { settings.shakeMult = +shake.value; saveSettings(); labels(); });
+  tut.addEventListener('change', () => { settings.tutorial = tut.checked; saveSettings(); if (!settings.tutorial) hud.setTutorial(''); });
 }
 
 let settingsReturnTo = 'start';
@@ -215,6 +227,19 @@ document.getElementById('startBtn').addEventListener('click', () => {
 });
 document.getElementById('survivalBtn').addEventListener('click', () => {
   if (state === 'ready') startGame('survival');
+});
+document.getElementById('statsBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (state !== 'ready') return;
+  hud.showStats(stats);
+});
+document.getElementById('statsBack').addEventListener('click', () => {
+  hud.showScreen('start');
+});
+document.getElementById('statsClear').addEventListener('click', () => {
+  stats = { kills: 0, games: 0, bestWave: 0 };
+  saveStats();
+  hud.showStats(stats);
 });
 
 // ---------- 对局重置（胜利结算/暂停菜单共用） ----------
@@ -317,10 +342,13 @@ function tryLock() {
 
 function startGame(mode = 'classic') {
   sound.unlock(); // 恢复被浏览器挂起的音频
+  sound.startAmbient();
   if (game) teardownMatch(); // 从主菜单再次开局前，拆掉上一局的场景对象
   gameMode = mode;
   wave = 1;
   intermission = false;
+  stats.games++; saveStats();
+  tutorialT = 0; tutorialIdx = 0; tutorialHideAt = -1;
   const { playerSpawn, colliders } = assets.level;
 
   // 本局所有场景对象统一挂到 matchGroup，回主菜单时整体拆除
@@ -333,9 +361,10 @@ function startGame(mode = 'classic') {
   player.colliders = colliders;
   player.onDamage = (amt, from) => {
     hud.damageFlash();
-    player.addShake(0.22); // 受击屏幕震动
+    player.addShake(0.22 * settings.shakeMult); // 受击屏幕震动（强度可设置）
     sound.play('hurt', { volume: 0.55 });
   };
+  player.onStep = () => sound.play('step', { volume: 0.1, pitch: 0.85 + Math.random() * 0.3 });
 
   const effects = new Effects(matchGroup);
 
@@ -412,11 +441,14 @@ function waveMult(n) {
 function startWave(n) {
   wave = n;
   intermission = false;
+  const isBossWave = gameMode === 'survival' && n % 10 === 0;
   let count = Math.min(3 + n, 9);
-  game.enemies.startWave(count, waveMult(n), n);
+  game.enemies.startWave(isBossWave ? 3 : count, waveMult(n), n, { boss: isBossWave });
 
-  // 精英波（每 5 波）：领队强化成精英，必掉稀有补给
-  if (n % 5 === 0) {
+  if (isBossWave) {
+    hud.killfeed(`☠ 第 ${n} 波 — BOSS 来袭，击毁它！`);
+    sound.play('explosion', { volume: 0.7, pitch: 0.6 });
+  } else if (n % 5 === 0) {
     const elite = game.enemies.enemies.find(e => e.alive);
     if (elite) {
       elite.hp *= 2.2;
@@ -429,7 +461,21 @@ function startWave(n) {
     hud.killfeed(`第 ${n} 波来袭 — ${count} 名敌人`);
   }
   sound.play('reload', { volume: 0.6, pitch: 0.8 });
+  hud.setTutorial(''); // 开波清掉引导/选卡提示
 }
+
+// 打击停顿：重kill短暂慢动作
+let hitStopT = 0, hitStopScale = 1;
+function hitStop(duration, scale) { hitStopT = duration; hitStopScale = scale; }
+
+// ---------- 新手引导（帧驱动顺序提示） ----------
+const TUTORIAL_STEPS = [
+  [2,   'WASD 移动 · 鼠标 视角'],
+  [5.5, '左键 连发射击 · 右键 机瞄'],
+  [9,   'Shift 奔跑 · 空格 跳跃'],
+  [13,  '走近补给自动拾取 · 血少时优先找药水']
+];
+let tutorialT = 0, tutorialIdx = 0;
 
 // 波次肃清 → 强化三选一 → 下一波
 function offerUpgrade() {
@@ -438,23 +484,18 @@ function offerUpgrade() {
   input.fire = false; input.ads = false;
   game.player.keys.clear();
   const cards = pickUpgradeCards(3, runTaken, runMods);
+  hud.setTutorial('肃清完成！按 1 / 2 / 3 选择强化');
   hud.showUpgradeCards(cards, runTaken, (i) => {
     const u = cards[i];
     runTaken[u.id] = (runTaken[u.id] || 0) + 1;
     runPicks.push(u.name);
     u.apply(runMods, { player: game.player });
-    game.weapon.runMods = runMods; // 注意：这里必须用 game.weapon（offerUpgrade 拿不到 startGame 的局部变量）
-    // 玩家侧属性同步（移动/跳跃/冲刺/生命上限）
-    game.player.moveMult = runMods.moveMult;
-    game.player.extraJumps = runMods.extraJumps;
-    game.player.hasDash = runMods.hasDash;
-    game.player.dashCdMult = runMods.dashCdMult;
-    game.player.maxHp = 100 + runMods.maxHpBonus;
-    game.player.health = Math.min(game.player.health, game.player.maxHp);
+    syncRunModsToEntities();
     hud.killfeed(`强化获得：${u.name} — ${u.desc}`);
-    sound.play('hurt', { volume: 0.4, pitch: 1.8 });
+    sound.play('pickup', { volume: 0.5, pitch: 1.4 });
     state = 'playing';
     waveDelay = 1.3; // 帧驱动：1.3 秒游戏时间后开下一波
+    hud.setTutorial('强化已生效 — 下一波来袭！');
   });
 }
 
@@ -474,16 +515,11 @@ function onPlayerDeath() {
 
   // 生存模式（类肉鸽）：阵亡即结算本局 Build
   if (gameMode === 'survival') {
-    let best = 0;
-    try { best = +localStorage.getItem('ab_bestwave') || 0; } catch (e) {}
-    if (wave > best) {
-      best = wave;
-      try { localStorage.setItem('ab_bestwave', String(best)); } catch (e) {}
-    }
+    if (wave > stats.bestWave) { stats.bestWave = wave; saveStats(); }
     hud.setWinTitle('生 存 终 结');
     const acc = shotsFired > 0 ? Math.round(shotsHit / shotsFired * 100) : 0;
     const build = runPicks.length ? `强化：${runPicks.join(' · ')}` : '未获得强化';
-    hud.winStats(`撑到第 ${wave} 波 · 击杀 ${kills} · 命中率 ${acc}%\n${build}\n历史最佳：第 ${best} 波`);
+    hud.winStats(`撑到第 ${wave} 波 · 击杀 ${kills} · 命中率 ${acc}%\n${build}\n历史最佳：第 ${stats.bestWave} 波`);
     hud.showScreen('win');
     state = 'win';
     document.exitPointerLock();
@@ -523,6 +559,7 @@ function onPlayerDeath() {
 
 function onEnemyKilled(e) {
   kills++;
+  stats.kills++;
   // 吸血强化
   if (runMods.lifesteal > 0) game.player.heal(runMods.lifesteal);
   // 掉落判定：低血量更容易出药水；掉率强化生效
@@ -533,7 +570,18 @@ function onEnemyKilled(e) {
   else if (roll < 0.62 * dm) game.drops.spawn(e.pos, 'ammo');
   // 精英必掉双补给
   if (e.elite) { game.drops.spawn(e.pos, 'heal'); game.drops.spawn(e.pos, 'ammo'); }
-  hud.killfeed(`✔ 击杀 敌方 ${e.typeLabel || 'unit'}`);
+
+  // 击杀特效分级：重装/精英/Boss 递增（hit-stop 慢动作）
+  if (e.typeLabel === '重装兵') hitStop(0.15, 0.35);
+  if (e.elite) hitStop(0.22, 0.3);
+  if (e.isBoss) {
+    hitStop(0.5, 0.22);
+    game.drops.spawn(e.pos, 'heal'); game.drops.spawn(e.pos, 'ammo');
+  }
+  hud.killfeed(e.isBoss ? '☠ BOSS 已击毁！' : `✔ 击杀 敌方 ${e.typeLabel || 'unit'}`);
+
+  // BOSS 击杀奖励：随机一张史诗强化
+  if (e.isBoss) grantEpicUpgrade();
 
   if (gameMode === 'survival') {
     // 波次清算：全部肃清 → 强化三选一 → 下一波
@@ -560,6 +608,29 @@ function onEnemyKilled(e) {
   }
 }
 
+// BOSS 击杀奖励：随机一张史诗强化
+function grantEpicUpgrade() {
+  const pool = UPGRADES.filter(u => u.rarity === 'epic' && (runTaken[u.id] || 0) < u.max && (!u.need || u.need(runMods)));
+  if (pool.length === 0) return;
+  const u = pool[(Math.random() * pool.length) | 0];
+  runTaken[u.id] = (runTaken[u.id] || 0) + 1;
+  runPicks.push(u.name);
+  u.apply(runMods, { player: game.player });
+  syncRunModsToEntities();
+  hud.killfeed(`获得史诗强化：${u.name} — ${u.desc}`);
+}
+
+// 强化/重置后统一同步局内属性到实体
+function syncRunModsToEntities() {
+  game.weapon.runMods = runMods;
+  game.player.moveMult = runMods.moveMult;
+  game.player.extraJumps = runMods.extraJumps;
+  game.player.hasDash = runMods.hasDash;
+  game.player.dashCdMult = runMods.dashCdMult;
+  game.player.maxHp = 100 + runMods.maxHpBonus;
+  game.player.health = Math.min(game.player.health, game.player.maxHp);
+}
+
 // ---------- 输入 ----------
 const input = { fire: false, ads: false, lookDX: 0, lookDY: 0 };
 
@@ -576,6 +647,7 @@ document.addEventListener('keydown', (e) => {
     if (e.code === 'Digit1') game.weapon.switchTo(0);
     if (e.code === 'Digit2') game.weapon.switchTo(1);
     if (e.code === 'Digit3') game.weapon.switchTo(2);
+    if (e.code === 'Digit4') game.weapon.switchTo(3);
   }
   if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight', 'KeyQ'].includes(e.code)) {
     game && game.player.keys.add(e.code);
@@ -631,25 +703,43 @@ let fpsFrames = 0, fpsAcc = 0;
 renderer.setAnimationLoop(() => {
   try {
     const dt = Math.min(clock.getDelta(), 0.05);
+    // 打击停顿：重kill短暂慢动作（只缩放世界更新，不影响计时）
+    const effDt = hitStopT > 0 ? dt * hitStopScale : dt;
+    hitStopT = Math.max(0, hitStopT - dt);
     if (game && (state === 'playing' || state === 'dead')) {
       if (state === 'playing') {
-        game.player.update(dt);
-        game.weapon.update(dt, input, targets());
-        game.drops.update(dt, game.player, onDropPickup);
+        game.player.update(effDt);
+        game.weapon.update(effDt, input, targets());
+        game.drops.update(effDt, game.player, onDropPickup);
         // 帧驱动的流程计时（强化选择 / 下一波）
         if (upgradeDelay >= 0) {
-          upgradeDelay -= dt;
+          upgradeDelay -= effDt;
           if (upgradeDelay < 0) offerUpgrade();
         }
         if (waveDelay >= 0) {
-          waveDelay -= dt;
+          waveDelay -= effDt;
           if (waveDelay < 0) startWave(wave + 1);
         }
+        // 新手引导（帧驱动时间轴）
+        if (settings.tutorial && tutorialIdx < TUTORIAL_STEPS.length) {
+          tutorialT += effDt;
+          const step = TUTORIAL_STEPS[tutorialIdx];
+          if (tutorialT >= step[0]) {
+            hud.setTutorial(step[1]);
+            tutorialHideAt = tutorialT + 3.2;
+            tutorialIdx++;
+          }
+        } else if (tutorialHideAt > 0 && tutorialT >= tutorialHideAt) {
+          hud.setTutorial('');
+          tutorialHideAt = -1;
+        }
+        // 环境音战斗强度
+        sound.setCombat(game.enemies.aliveCount() > 0 ? 1 : 0.2);
       }
-      game.enemies.update(dt);
-      game.effects.update(dt);
+      game.enemies.update(effDt);
+      game.effects.update(effDt);
       updateHUD();
-      if (window.__autoTick) window.__autoTick(dt); // 自测阶段推进（帧驱动）
+      if (window.__autoTick) window.__autoTick(effDt); // 自测阶段推进（帧驱动）
     } else if (game && state === 'paused') {
       game.effects.update(dt);
     }
@@ -688,11 +778,11 @@ function onDropPickup(type) {
   if (type === 'heal') {
     game.player.health = Math.min(100, game.player.health + 35);
     hud.healFlash();
-    sound.play('hurt', { volume: 0.4, pitch: 1.6 });
+    sound.play('pickup', { volume: 0.5, pitch: 1.6 });
   } else {
     const w = game.weapon.cur();
     w.reserve += Math.ceil(w.cfg.mag * 0.75);
-    sound.play('reload', { volume: 0.5, pitch: 1.5 });
+    sound.play('pickup', { volume: 0.5 });
   }
 }
 
@@ -706,6 +796,10 @@ function updateHUD() {
   // 冲刺冷却指示（解锁相位冲刺后显示）
   if (p.hasDash) hud.setDash(p.dashCd > 0 ? `Q 冲刺 ${p.dashCd.toFixed(1)}s` : 'Q 冲刺 就绪');
   else hud.setDash('');
+  // BOSS/精英血条
+  const barTarget = game.enemies.enemies.find(e => e.alive && (e.isBoss || e.elite));
+  if (barTarget) hud.setBossBar(`${barTarget.typeLabel}（第 ${wave} 波）`, Math.max(0, barTarget.hp / barTarget.maxHp));
+  else hud.setBossBar(null);
   // 顶部战况按模式显示
   if (gameMode === 'survival') hud.setTopStat('波次 WAVE', String(wave), `剩余敌人 ${game.enemies.aliveCount()}`);
   else hud.setTopStat('击杀 KILLS', String(kills), `目标 ${WIN_KILLS} 杀`);
@@ -834,4 +928,6 @@ if (new URLSearchParams(location.search).get('autotest')) {
     }
   }, 300);
 }
+
+
 

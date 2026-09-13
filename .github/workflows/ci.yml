@@ -1,0 +1,34 @@
+name: CI
+
+on: [push]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 语法检查所有游戏模块
+        run: |
+          for f in src/*.js lib/three.module.js; do
+            node --check "$f"
+          done
+      - name: 校验 importmap 依赖完整性
+        run: node -e "
+          const fs = require('fs'), path = require('path');
+          const html = fs.readFileSync('index.html', 'utf8');
+          if (!html.includes('importmap')) process.exit(1);
+          const files = [];
+          function walk(d) { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); if (fs.statSync(p).isDirectory()) walk(p); else if (p.endsWith('.js')) files.push(p); } }
+          walk('src'); walk('lib/addons');
+          for (const f of files) {
+            const c = fs.readFileSync(f, 'utf8');
+            for (const m of c.matchAll(/from\s+'(\.[^']+)'/g)) {
+              const t = path.join(path.dirname(f), m[1]);
+              if (!fs.existsSync(t)) { console.error('缺失依赖: ' + m[1] + ' (来自 ' + f + ')'); process.exit(1); }
+            }
+          }
+          console.log('依赖完整性 OK: ' + files.length + ' 个模块');
+        "

@@ -73,6 +73,15 @@
   /* FPS 显示 */
   #fps { position: absolute; left: 10px; bottom: 10px; color: #9fe8b7; font: 12px Consolas, monospace; text-shadow: 0 1px 2px #000; }
 
+  /* BOSS/精英血条 */
+  #bossbar { position: absolute; left: 50%; top: 42px; transform: translateX(-50%); width: 46%; display: none; text-align: center; }
+  #bossbar .label { color: #ffb1a8; font-size: 13px; letter-spacing: 2px; text-shadow: 0 1px 3px #000; margin-bottom: 4px; }
+  #bossbar .frame { height: 10px; background: rgba(0,0,0,.45); border: 1px solid rgba(255,140,120,.55); border-radius: 5px; overflow: hidden; }
+  #bossbar .fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff5340, #ff9d6c); }
+
+  /* 新手引导提示 */
+  #tutorial { position: absolute; left: 50%; top: 18%; transform: translateX(-50%); color: #eaf6ff; font-size: 16px; letter-spacing: 1px; background: rgba(10, 16, 26, .62); border: 1px solid rgba(120, 180, 240, .3); padding: 9px 20px; border-radius: 6px; display: none; text-align: center; }
+
   /* 伤害数字 */
   #dmglayer { position: absolute; inset: 0; overflow: hidden; }
   .dmg { position: absolute; font: 700 17px "Segoe UI", sans-serif; color: #ffd257; text-shadow: 0 1px 3px rgba(0,0,0,.9); transform: translate(-50%, 0); animation: dmgfloat .7s ease-out forwards; }
@@ -159,6 +168,8 @@
   </div>
   <div id="fps"></div>
   <div id="debugbar"></div>
+  <div id="bossbar"><div class="label"></div><div class="frame"><div class="fill"></div></div></div>
+  <div id="tutorial"></div>
   <div id="dashcd"></div>
   <div id="killfeed"></div>
   <div id="lockhint">🖱 鼠标未锁定 — 点击画面恢复视角（锁定后左键才能开枪）</div>
@@ -176,6 +187,7 @@
     <button class="btn" id="btnRestartMatch" style="display:none">重 开 本 局</button>
     <button class="btn" id="btnMainMenu" style="display:none">回 主 菜 单</button>
     <button class="btn" id="openSettingsBtn" style="letter-spacing:2px">⚙ 设置</button>
+    <button class="btn" id="statsBtn">战 绩</button>
   </div>
   <div style="margin-top:10px;font-size:13px;color:#8fa8bd">
     经典：敌人无限复活，先拿 10 杀获胜 · 生存：一波波肃清不断增强的敌人，看你撑几波
@@ -199,6 +211,19 @@
   <h1 style="font-size:32px;letter-spacing:6px">选 择 一 项 强 化</h1>
   <h2 id="upgradeTip" style="font-size:15px;margin-top:10px">按 1 / 2 / 3 选择</h2>
   <div class="cards" id="upgradeCards"></div>
+</div>
+
+<div id="statsScreen" class="screen hidden">
+  <h1 style="font-size:34px;letter-spacing:6px">战 绩</h1>
+  <div style="margin-top:24px;font-size:16px;color:#cfe3f5;line-height:2.2">
+    <div>总击杀 <span id="stKills" style="color:#ffd257;font-weight:700">0</span></div>
+    <div>总局数 <span id="stGames" style="color:#8fe3ff;font-weight:700">0</span></div>
+    <div>最佳生存 <span id="stWave" style="color:#ffd257;font-weight:700">第 0 波</span></div>
+  </div>
+  <div class="btnrow">
+    <button class="btn" id="statsBack">返 回</button>
+    <button class="btn" id="statsClear" style="border-color:#a05a5a">清空战绩</button>
+  </div>
 </div>
 
 <div id="settingsScreen" class="screen hidden">  <h1 style="font-size:36px;letter-spacing:6px">设 置</h1>
@@ -226,6 +251,16 @@
     <div class="setrow">
       <label>显示帧率</label>
       <input type="checkbox" id="setFpsShow" checked>
+      <span></span>
+    </div>
+    <div class="setrow">
+      <label>受击震屏强度</label>
+      <input type="range" id="setShake" min="0" max="1.5" step="0.25">
+      <span id="setShakeV"></span>
+    </div>
+    <div class="setrow">
+      <label>新手引导提示</label>
+      <input type="checkbox" id="setTut" checked>
       <span></span>
     </div>
   </div>
